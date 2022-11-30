@@ -504,7 +504,7 @@ image.plot(dur_matrix,  xaxt= "n", yaxt= "n", frame.plot=F,
            horizontal = FALSE,
            legend.width = 1,
            legend.mar = 3,
-           legend.only = TRUE) 
+           legend.only = TRUE)  
 
 image(freq_matrix,  xaxt= "n", yaxt= "n", frame.plot=F,
       col = col_scheme)
