@@ -216,6 +216,12 @@ grp_contact_summary <- grp_daily_contacts %>%
             nodes_in_contact_d_grp = max(nodes_in_contact_d_grp, na.rm = TRUE))
 rm(grp_daily_contacts, grp_days_nodes)
 
+#Fill variant across hh
+grp_contact_summary <- grp_contact_summary %>% 
+  group_by(hhid) %>% 
+  mutate(ixesarsvarf1 = first(na.omit(ixesarsvarf1))) %>% 
+  ungroup()
+
 #Prepare for analysis
 
 #Combine with metadata
@@ -504,7 +510,7 @@ image.plot(dur_matrix,  xaxt= "n", yaxt= "n", frame.plot=F,
            horizontal = FALSE,
            legend.width = 1,
            legend.mar = 3,
-           legend.only = TRUE)  
+           legend.only = TRUE) 
 
 image(freq_matrix,  xaxt= "n", yaxt= "n", frame.plot=F,
       col = col_scheme)
@@ -722,6 +728,7 @@ print(data.frame(tidy(ind_fin_mod_adur,conf.int=TRUE,exponentiate=TRUE,effects="
         mutate_if(is.numeric, round, 4), quote = TRUE, noSpaces = TRUE)
 
 #Build model: Grouped analysis ----
+
 grp_contact_summary$sars <- factor(grp_contact_summary$sars)
 grp_fin_mod <- glmer(sars ~ agegrp9 + smokecignow1 + bmicat + ixesarsvarf1 +
                        (1 | site) + (1 | hhid) + offset(nodes_in_contact_d_grp), 
