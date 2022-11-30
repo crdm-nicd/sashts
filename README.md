@@ -17,3 +17,4 @@ To start, download and unzip files from sashts_data.zip which contains two files
  Data dictionary also provided: Data dictionary.xlsx is stored in main repository
   
  Analyses codes: SA-S-HTS Proximity Analysis.R run on R-4.1.1 in R Studio 2021.09.0 Build 351
+ 
