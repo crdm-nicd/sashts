@@ -4,9 +4,14 @@
         #and without HIV in South Africa, 2020-2021: a case-ascertained, 
         #prospective observational household transmission study
 
-#Purpose: Describe close proximity evenrs and assess association between close proximity events and SARS-CoV-2 transmission
+#Purpose: Describe close proximity events and assess association between close proximity events and SARS-CoV-2 transmission
 #Created by: Jackie Kleynhans, National Institute for Communicable Diseases
 #Contact: jackiel@nicd.ac.za
+
+#Updates made March 2023 (post peer-review)
+  #Dataset: includes variable (members_excluded) to flag households where some members were excluded from analysis due to baseline sero-positivity
+  #Script
+      #Additional contact parameters added: maximum contact frequency and duration, average frequency, cumulative time in contact
 
 #Clear workspace
 rm(list=ls())
@@ -21,13 +26,17 @@ library(broom.mixed)
 library(tableone)
 library(ggpubr)
 library(fields)
+library(gtsummary)
 
 #Set working directory
 setwd("~/COVID-19 HTS/Proximity/Data/Kleynhans 2023 SA-S-HTS Proximity")
 
 #Import data
 hts_cnet_filt_sym <- read_csv("sashts_contact_network.csv")
-meta <- read_csv("sashts_metadata.csv")
+meta <- read_csv("sashts_metadata.csv") %>% 
+  mutate(agegrp9 = if_else(agegrp9=="12-May", "5-12", agegrp9)) %>% 
+  mutate(agegrp9 = if_else(agegrp9=="60", "=60", agegrp9)) %>% 
+  mutate(ixagegrp9 = if_else(ixagegrp9=="60", "=60", ixagegrp9))
 
 #Set reference categories
 meta$site <- factor(meta$site, 
@@ -71,15 +80,19 @@ meta$sex <- factor(meta$sex,
                    levels = c("Male", "Female"))
 meta$sex <- relevel(meta$sex, 
                     ref="Male")
+meta$ixsex <- factor(meta$ixsex, 
+                   levels = c("Male", "Female"))
+meta$ixsex <- relevel(meta$ixsex, 
+                    ref="Male")
 meta$sars_indid1 <- factor(meta$sars, 
                           levels = c("Negative", "Positive"))
 
 
 hts_cnet_filt_sym$age_indid1 <- factor(hts_cnet_filt_sym$age_indid1, 
-                       levels = c("<5", "5-12", "13-17", "18-34","35-59", "=60"), 
+                       levels = c("<5", "5-12", "13-17", "18-34","35-59", "60"), 
                        labels = c("<5", "5-12", "13-17", "18-34","35-59","\u226560"))
 hts_cnet_filt_sym$age_indid2 <- factor(hts_cnet_filt_sym$age_indid2, 
-                                       levels = c("<5", "5-12", "13-17", "18-34","35-59", "=60"), 
+                                       levels = c("<5", "5-12", "13-17", "18-34","35-59", "60"), 
                                        labels = c("<5", "5-12", "13-17", "18-34","35-59","\u226560"))
 hts_cnet_filt_sym$sars_indid1 <- factor(hts_cnet_filt_sym$sars_indid1, 
                                        levels = c("Negative", "Positive"))
@@ -105,17 +118,22 @@ contact_summary_hh$contact_dur_norm_full <- contact_summary_hh$contact_dur_full/
 
 #Overall contact summary, includes index ----
 ind_daily_contacts_inc_index <- hts_cnet_filt_sym %>%
-  group_by(indid1, date) %>%
+  group_by(hh, indid1, date) %>%
   summarize(ind_contact_freq_p_day = n(),
             ind_contact_dur_p_day = sum(duration_sec),
             ind_contact_freq_full = n(),
             ind_ave_dur_p_day = ind_contact_dur_p_day/ind_contact_freq_p_day,
-            ind_contatc_freq_median_p_day = median(ind_contact_freq_p_day)) %>% 
+            ind_contact_freq_median_p_day = median(ind_contact_freq_p_day),
+            members_excluded = max(members_excluded)) %>% 
   ungroup() %>% 
   complete(indid1,
            fill = list(ind_contact_freq_p_day = 0, ind_contact_dur_p_day = 0, 
                        ind_contact_freq_full = 0, 
-                       ind_ave_dur_p_day = 0, ind_contatc_freq_median_p_day = 0))
+                       ind_ave_dur_p_day = 0, ind_contact_freq_median_p_day = 0)) %>% 
+  mutate(hh = substr(indid1, 1, 4)) %>% 
+  group_by(hh) %>% 
+  mutate(members_excluded = max(members_excluded, na.rm = TRUE)) %>% 
+  ungroup()
 
 #Obtain number of days 
 ind_days_nodes <- hts_cnet_filt_sym %>% 
@@ -125,102 +143,122 @@ ind_days_nodes <- hts_cnet_filt_sym %>%
 #Merge into daily summary
 ind_daily_contacts_inc_index <- left_join(ind_daily_contacts_inc_index, ind_days_nodes)
 
-#Generate summary variables
+#Calculate daily values
 ind_contact_summary_inc_index <- ind_daily_contacts_inc_index %>%
   group_by(indid1) %>%
   summarize(ind_contact_days_full = sum(ind_contact_days_full),
             ind_contact_freq_full = sum(ind_contact_freq_full),
-            ind_contact_dur_full = sum(ind_contact_dur_p_day),
-            ind_contact_ave_dur_full = if_else(ind_contact_dur_full!=0, ind_contact_dur_full/ind_contact_freq_full, 0),
-            ind_contatc_freq_mean_p_day = mean(ind_contact_freq_p_day),
-            ind_contatc_freq_median_p_day = median(ind_contact_freq_p_day),
-            ind_contatc_dur_mean_p_day = mean(ind_contact_dur_p_day),
-            ind_contatc_dur_median_p_day = median(ind_contact_dur_p_day),
-            ind_ave_dur_mean_p_day = mean(ind_ave_dur_p_day),
-            ind_ave_dur_median_p_day = median(ind_ave_dur_p_day))
+            ind_contact_dur_full = sum(ind_contact_dur_p_day/60),
+            ind_contact_ave_dur_full = if_else(ind_contact_dur_full!=0, (ind_contact_dur_full/ind_contact_freq_full), 0),
+            ind_contact_freq_mean_p_day = mean(ind_contact_freq_p_day),
+            ind_contact_freq_median_p_day = median(ind_contact_freq_p_day),
+            ind_contact_dur_mean_p_day = mean(ind_contact_dur_p_day/60),
+            ind_contact_dur_median_p_day = median(ind_contact_dur_p_day/60),
+            ind_ave_dur_mean_p_day = mean(ind_ave_dur_p_day/60),
+            ind_ave_dur_median_p_day = median(ind_ave_dur_p_day/60),
+            ind_contact_freq_max = max(ind_contact_freq_p_day, na.rm = TRUE),
+            ind_contact_dur_max = max(ind_contact_dur_p_day/60, na.rm = TRUE),
+            ind_contact_ave_freq_p_day = if_else(ind_contact_freq_full!=0, ind_contact_freq_full/ind_contact_days_full, 0),
+            ind_contact_cum_p_day = if_else(ind_contact_dur_full!=0, ind_contact_dur_full/ind_contact_days_full, 0),
+            members_excluded = max(members_excluded, na.rm = TRUE))
 rm(ind_daily_contacts_inc_index)
 
-#Individual analysis - contacts with index 
+#Individual analysis - contacts with index ----
 #Obtain contact features on individual level 
 #Summarize individual contact patterns 
 ind_daily_contacts <- hts_cnet_filt_sym %>% 
   mutate(index_contact = if_else(grepl("-001", indid2), 1, 0)) %>% 
-  group_by(indid1,index_contact, date) %>% 
+  group_by(hh, indid1,index_contact, date) %>% 
   summarize(ind_contact_freq_p_day = n(),
             ind_contact_dur_p_day = sum(duration_sec),
             ind_contact_freq_full = n(),
             ind_ave_dur_p_day = ind_contact_dur_p_day/ind_contact_freq_p_day,
-            ind_contatc_freq_median_p_day = median(ind_contact_freq_p_day)) %>% 
+            ind_contact_freq_median_p_day = median(ind_contact_freq_p_day),
+            members_excluded = max(members_excluded)) %>%
   ungroup() %>% 
   complete(indid1,index_contact,
            fill = list(ind_contact_freq_p_day = 0, ind_contact_dur_p_day = 0, 
                        ind_contact_freq_full = 0, 
-                       ind_ave_dur_p_day = 0, ind_contatc_freq_median_p_day = 0)) %>% 
-  filter(index_contact==1 & grepl("-001", indid1)==FALSE)
+                       ind_ave_dur_p_day = 0, ind_contact_freq_median_p_day = 0)) %>% 
+  filter(index_contact==1 & grepl("-001", indid1)==FALSE) %>% 
+  mutate(hh = substr(indid1, 1, 4)) %>% 
+  group_by(hh) %>% 
+  mutate(members_excluded = max(members_excluded, na.rm = TRUE)) %>% 
+  ungroup()
 
 #Merge into daily summary
 ind_daily_contacts <- left_join(ind_daily_contacts, ind_days_nodes)
 
-#Generate summary variables
+#Calculate daily values
 ind_contact_summary <- ind_daily_contacts %>% 
   group_by(indid1) %>% 
   summarize(ind_contact_days_full = sum(ind_contact_days_full),
             ind_contact_freq_full = sum(ind_contact_freq_full),
-            ind_contact_dur_full = sum(ind_contact_dur_p_day),
-            ind_contact_ave_dur_full = if_else(ind_contact_dur_full!=0, ind_contact_dur_full/ind_contact_freq_full, 0),
-            ind_contatc_freq_mean_p_day = mean(ind_contact_freq_p_day),
-            ind_contatc_freq_median_p_day = median(ind_contact_freq_p_day),
-            ind_contatc_dur_mean_p_day = mean(ind_contact_dur_p_day),
-            ind_contatc_dur_median_p_day = median(ind_contact_dur_p_day),
-            ind_ave_dur_mean_p_day = mean(ind_ave_dur_p_day),
-            ind_ave_dur_median_p_day = median(ind_ave_dur_p_day))
+            ind_contact_dur_full = sum(ind_contact_dur_p_day/60),
+            ind_contact_ave_dur_full = if_else(ind_contact_dur_full!=0, (ind_contact_dur_full/ind_contact_freq_full), 0),
+            ind_contact_freq_mean_p_day = mean(ind_contact_freq_p_day),
+            ind_contact_freq_median_p_day = median(ind_contact_freq_p_day),
+            ind_contact_dur_mean_p_day = mean(ind_contact_dur_p_day/60),
+            ind_contact_dur_median_p_day = median(ind_contact_dur_p_day/60),
+            ind_ave_dur_mean_p_day = mean(ind_ave_dur_p_day/60),
+            ind_ave_dur_median_p_day = median(ind_ave_dur_p_day/60),
+            ind_contact_freq_max = max(ind_contact_freq_p_day, na.rm = TRUE),
+            ind_contact_dur_max = max(ind_contact_dur_p_day/60, na.rm = TRUE),
+            ind_contact_ave_freq_p_day = if_else(ind_contact_freq_full!=0, ind_contact_freq_full/ind_contact_days_full, 0),
+            ind_contact_cum_p_day = if_else(ind_contact_dur_full!=0, ind_contact_dur_full/ind_contact_days_full, 0),
+            members_excluded = max(members_excluded, na.rm = TRUE))
 
 rm(ind_daily_contacts, ind_days_nodes)
 
-#Grouped analysis
-#Contact parameters with pos individuals (grp_contact_summary, generated from hts_cnet_filt_sym)
+#Grouped analysis - Contact parameters with pos individuals ----
 grp_daily_contacts <- hts_cnet_filt_sym %>% 
   group_by(hh, indid1, sars_indid2, pair_sars, hcir, date) %>%
   summarize(grp_contact_freq_p_day = n(),
             grp_contact_dur_p_day = sum(duration_sec),
             grp_contact_freq_full = n(),
             grp_ave_dur_p_day = grp_contact_dur_p_day/grp_contact_freq_p_day,
-            grp_contatc_freq_median_p_day = median(grp_contact_freq_p_day)) %>% 
+            grp_contact_freq_median_p_day = median(grp_contact_freq_p_day),
+            members_excluded = max(members_excluded)) %>% 
   ungroup() %>% 
-  complete(indid1, sars_indid2, 
+  complete(indid1, sars_indid2,
            fill = list(grp_contact_freq_p_day = 0, grp_contact_dur_p_day = 0, 
                        grp_contact_freq_full = 0, 
-                       grp_ave_dur_p_day = 0, grp_contatc_freq_median_p_day = 0)) %>% 
-  filter(sars_indid2=="Positive")
+                       grp_ave_dur_p_day = 0, grp_contact_freq_median_p_day = 0)) %>% 
+  filter(sars_indid2=="Positive") %>% 
+  mutate(hh = substr(indid1, 1, 4)) %>% 
+  group_by(hh) %>% 
+  mutate(members_excluded = max(members_excluded, na.rm = TRUE)) %>% 
+  ungroup()
 
 #Obtain number of days and nodes
 grp_days_nodes <- hts_cnet_filt_sym %>% 
   group_by(indid1) %>% 
   summarise(grp_contact_days_full = n_distinct(date),
             nodes_in_contact_d_grp = n_distinct(indid2))
+
 #Merge into daily summary
 grp_daily_contacts <- left_join(grp_daily_contacts, grp_days_nodes)
-#Generate summary variables
+
+#Calculate daily values
 grp_contact_summary <- grp_daily_contacts %>% 
   group_by(indid1) %>% 
   summarize(grp_contact_days_full = sum(grp_contact_days_full),
             grp_contact_freq_full = sum(grp_contact_freq_full),
             grp_contact_dur_full = sum(grp_contact_dur_p_day),
             grp_contact_ave_dur_full = if_else(grp_contact_dur_full!=0, grp_contact_dur_full/grp_contact_freq_full, 0),
-            grp_contatc_freq_mean_p_day = mean(grp_contact_freq_p_day),
-            grp_contatc_freq_median_p_day = median(grp_contact_freq_p_day),
-            grp_contatc_dur_mean_p_day = mean(grp_contact_dur_p_day),
-            grp_contatc_dur_median_p_day = median(grp_contact_dur_p_day),
+            grp_contact_freq_mean_p_day = mean(grp_contact_freq_p_day),
+            grp_contact_freq_median_p_day = median(grp_contact_freq_p_day),
+            grp_contact_dur_mean_p_day = mean(grp_contact_dur_p_day),
+            grp_contact_dur_median_p_day = median(grp_contact_dur_p_day),
             grp_ave_dur_mean_p_day = mean(grp_ave_dur_p_day),
-            grp_ave_dur_median_p_day = median(grp_ave_dur_p_day),
-            nodes_in_contact_d_grp = max(nodes_in_contact_d_grp, na.rm = TRUE))
+            grp_ave_dur_median_p_day = median(grp_ave_dur_p_day),grp_contact_freq_max = max(grp_contact_freq_p_day, na.rm = TRUE),
+            grp_contact_dur_max = max(grp_contact_dur_p_day/60, na.rm = TRUE),
+            grp_contact_freq_max = max(grp_contact_freq_p_day, na.rm = TRUE),
+            grp_contact_ave_freq_p_day = if_else(grp_contact_freq_full!=0, grp_contact_freq_full/grp_contact_days_full, 0),
+            grp_contact_cum_p_day = if_else(grp_contact_dur_full!=0, grp_contact_dur_full/grp_contact_days_full, 0),
+            nodes_in_contact_d_grp = max(nodes_in_contact_d_grp, na.rm = TRUE),
+            members_excluded = max(members_excluded))
 rm(grp_daily_contacts, grp_days_nodes)
-
-#Fill variant across hh
-grp_contact_summary <- grp_contact_summary %>% 
-  group_by(hhid) %>% 
-  mutate(ixesarsvarf1 = first(na.omit(ixesarsvarf1))) %>% 
-  ungroup()
 
 #Prepare for analysis
 
@@ -234,56 +272,79 @@ ind_contact_summary_inc_index <-full_join(ind_contact_summary_inc_index, meta, b
 #Grouped analysis
 grp_contact_summary <-left_join(grp_contact_summary, meta, by=c("indid1"="indid"))
 
+#Fill variant across hh (grouped analysis)
+grp_contact_summary <- grp_contact_summary %>% 
+  group_by(hhid) %>% 
+  mutate(ixesarsvarf1 = first(na.omit(ixesarsvarf1))) %>% 
+  ungroup()
+
 #---- Analysis 
 
-#Summary of overall contact parameters
+#Summary of overall contact parameters ----
 cont_overall_sum <- ind_contact_summary_inc_index %>% 
 rename("Site" = site,
        "Index" = index,
        "Age (years)" = agegrp9,
        "Sex" = sex,
        "SARS-CoV-2 infection" = sars,
-       "Median daily contact duration" = ind_contatc_dur_median_p_day,
-       "Median daily contact frequency" = ind_contatc_freq_median_p_day,
-       "Median daily average contact duration" = ind_ave_dur_median_p_day)
+       "Median daily duration" = ind_contact_dur_median_p_day,
+       "Maximum duration" = ind_contact_dur_max,
+       "Median daily frequency" = ind_contact_freq_median_p_day,
+       "Maximum frequency" = ind_contact_freq_max,
+       "Median average daily duration" = ind_ave_dur_median_p_day,
+       "Daily average frequency" = ind_contact_ave_freq_p_day,
+       "Cumulative time in contact" = ind_contact_cum_p_day)
 
-tableTwo <- CreateTableOne(vars = c("Median daily contact duration", "Median daily contact frequency", "Median daily average contact duration"),
+tableTwo <- CreateTableOne(vars = c("Median daily duration", "Maximum duration", "Median average daily duration", "Cumulative time in contact",
+                                    "Median daily frequency", "Maximum frequency",  "Daily average frequency"),
                            strata = c("Age (years)"), 
                            data = cont_overall_sum,
                            addOverall = TRUE)
 
 print(tableTwo, addOverall = TRUE, 
-      nonnormal  = c("Median daily contact duration", "Median daily contact frequency", "Median daily average contact duration"),
-      quote = TRUE, noSpaces = TRUE, contDigits=0)
+      nonnormal  = c("Median daily duration", "Maximum duration", 
+                     "Median daily frequency", "Maximum frequency", 
+                     "Median average daily duration", "Daily average frequency", 
+                     "Cumulative time in contact"),
+      quote = TRUE, noSpaces = TRUE, contDigits=1)
 
 #By site
 
 cont_overall_sum_k <- cont_overall_sum %>% 
     filter(Site == "Klerksdorp") 
 
-tableTwo <- CreateTableOne(vars = c("Median daily contact duration", "Median daily contact frequency", "Median daily average contact duration"),
+tableTwo <- CreateTableOne(vars = c("Median daily duration", "Maximum duration", "Median average daily duration", "Cumulative time in contact",
+                                    "Median daily frequency", "Maximum frequency",  "Daily average frequency"),
                            strata = c("Age (years)"), 
                            data = cont_overall_sum_k,
                            addOverall = TRUE)
 
-print(tableTwo, addOverall = TRUE,
-      nonnormal  = c("Median daily contact duration", "Median daily contact frequency", "Median daily average contact duration"),
-      quote = TRUE, noSpaces = TRUE, contDigits=0)
+print(tableTwo, addOverall = TRUE, 
+      nonnormal  = c("Median daily duration", "Maximum duration", 
+                     "Median daily frequency", "Maximum frequency", 
+                     "Median average daily duration", "Daily average frequency", 
+                     "Cumulative time in contact"),
+      quote = TRUE, noSpaces = TRUE, contDigits=1)
 
 cont_overall_sum_s <- cont_overall_sum %>% 
          filter(Site == "Soweto") 
 
-tableTwo <- CreateTableOne(vars = c("Median daily contact duration", "Median daily contact frequency", "Median daily average contact duration"),
+tableTwo <- CreateTableOne(vars = c("Median daily duration", "Maximum duration", "Median average daily duration", "Cumulative time in contact",
+                                    "Median daily frequency", "Maximum frequency",  "Daily average frequency"),
                            strata = c("Age (years)"), 
                            data = cont_overall_sum_s,
                            addOverall = TRUE)
 
 print(tableTwo, addOverall = TRUE, 
-      nonnormal  = c("Median daily contact duration", "Median daily contact frequency", "Median daily average contact duration"),
-      quote = TRUE, noSpaces = TRUE, contDigits=0)
+      nonnormal  = c("Median daily duration", "Maximum duration", 
+                     "Median daily frequency", "Maximum frequency", 
+                     "Median average daily duration", "Daily average frequency", 
+                     "Cumulative time in contact"),
+      quote = TRUE, noSpaces = TRUE, contDigits=1)
+
 rm(tableTwo)
 
-#As figure
+#As figures
 
 colfunc <-colorRampPalette(c("#006666", "#99e6e6","#8e02b1"))
 col_scheme1 <- colfunc(7)
@@ -300,11 +361,11 @@ cont_overall_sum_oa <-  cont_overall_sum %>%
 cont_overall_sum <- rbind(cont_overall_sum, cont_overall_sum_oa)
 
 #Plots
-#Frequency
-figfreq <- ggplot(cont_overall_sum, aes(x=`Age (years)`, y=`Median daily contact frequency`, fill=`Age (years)`)) +
+#Median daily duration
+figdurmed <- ggplot(cont_overall_sum, aes(x=`Age (years)`, y=(`Median daily duration`), fill=`Age (years)`)) +
   geom_boxplot(notch=FALSE) +
   facet_wrap(~Site) +
-  labs(y= "Median daily \nclose-proximity event frequency \n(log scale)\n") +
+  labs(y= "Median daily duration \n(minutes, log scale)\n") +
   theme_classic()+
   scale_fill_manual(values = col_scheme1,
                     guide = FALSE) +
@@ -313,11 +374,11 @@ figfreq <- ggplot(cont_overall_sum, aes(x=`Age (years)`, y=`Median daily contact
         axis.text.x=element_blank(),
         axis.title.y = element_text(size = 8))
 
-#Duration
-figdur <- ggplot(cont_overall_sum, aes(x=`Age (years)`, y=(`Median daily contact duration`/60), fill=`Age (years)`)) +
+#Maximum duration
+figdurmax <- ggplot(cont_overall_sum, aes(x=`Age (years)`, y=(`Maximum duration`), fill=`Age (years)`)) +
   geom_boxplot(notch=FALSE) +
   facet_wrap(~Site) +
-  labs(y= "Median daily cumulative \nclose-proximity events \n(minutes, log scale)") +
+  labs(y= "Maximum duration \n(minutes, log scale)\n") +
   theme_classic()+
   scale_fill_manual(values = col_scheme1,
                     guide = FALSE) +
@@ -326,13 +387,28 @@ figdur <- ggplot(cont_overall_sum, aes(x=`Age (years)`, y=(`Median daily contact
         axis.text.x=element_blank(),
         axis.title.y = element_text(size = 8))
 
-#Average duration
-figavedur <- ggplot(cont_overall_sum, aes(x=`Age (years)`, y=`Median daily average contact duration`, fill=`Age (years)`)) +
+#Median average daily duration
+figdurave <- ggplot(cont_overall_sum, aes(x=`Age (years)`, y=(`Median average daily duration`), fill=`Age (years)`)) +
   geom_boxplot(notch=FALSE) +
   facet_wrap(~Site) +
-  labs(y= "Median daily \naverage close-proximity event \nduration (seconds, log scale)\n") +
+  labs(y= "Median average daily duration \n(minutes, log scale)\n") +
   theme_classic()+
-  scale_fill_manual(values = col_scheme1) +
+  scale_fill_manual(values = col_scheme1,
+                    guide = FALSE) +
+  scale_y_continuous(trans='log10') +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.title.y = element_text(size = 8))
+
+#Cumulative time in contact
+figdurcum <- ggplot(cont_overall_sum, aes(x=`Age (years)`, y=(`Cumulative time in contact`), fill=`Age (years)`)) +
+  geom_boxplot(notch=FALSE) +
+  facet_wrap(~Site) +
+  labs(y= "Cumulative time in contact \n(minutes, log scale)") +
+  theme_classic()+
+  scale_fill_manual(values = col_scheme1,
+                    guide = FALSE) +
+  scale_y_continuous(trans='log10') +
   theme(legend.position="bottom",
         axis.title.y = element_text(size = 8),
         axis.text.x = element_text(size = 6),
@@ -342,16 +418,65 @@ figavedur <- ggplot(cont_overall_sum, aes(x=`Age (years)`, y=`Median daily avera
   scale_y_continuous(trans='log10') +
   guides(fill = guide_legend(nrow = 1))
 
+#Median daily frequency
+figfreqmed <- ggplot(cont_overall_sum, aes(x=`Age (years)`, y=`Median daily frequency`, fill=`Age (years)`)) +
+  geom_boxplot(notch=FALSE) +
+  facet_wrap(~Site) +
+  labs(y= "Median daily frequency \n(log scale)") +
+  theme_classic()+
+  scale_fill_manual(values = col_scheme1,
+                    guide = FALSE) +
+  scale_y_continuous(trans='log10') +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.title.y = element_text(size = 8))
 
-ggarrange(figdur, figfreq, figavedur, 
-          labels = c("A", "B", "C"),
+#Maximum daily frequency
+figfreqmax <- ggplot(cont_overall_sum, aes(x=`Age (years)`, y=`Maximum frequency`, fill=`Age (years)`)) +
+  geom_boxplot(notch=FALSE) +
+  facet_wrap(~Site) +
+  labs(y= "Maximum frequency \n(log scale)") +
+  theme_classic()+
+  scale_fill_manual(values = col_scheme1,
+                    guide = FALSE) +
+  scale_y_continuous(trans='log10') +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.title.y = element_text(size = 8))
+
+#Daily average frequency
+figfreqave <- ggplot(cont_overall_sum, aes(x=`Age (years)`, y=`Daily average frequency`, fill=`Age (years)`)) +
+  geom_boxplot(notch=FALSE) +
+  facet_wrap(~Site) +
+  labs(y= "Daily average frequency \n(log scale)") +
+  theme_classic()+
+  scale_fill_manual(values = col_scheme1,
+                    guide = FALSE) +
+  scale_y_continuous(trans='log10')  +
+  theme(legend.position="bottom",
+        axis.title.y = element_text(size = 8),
+        axis.text.x = element_text(size = 6),
+        axis.title.x = element_text(size = 8),
+        legend.text=element_text(size=8),
+        legend.title=element_text(size=8)) +
+  scale_y_continuous(trans='log10') +
+  guides(fill = guide_legend(nrow = 1))
+
+ggarrange(figdurmed, figdurmax, figdurave, figdurcum, 
+          ncol = 1, nrow = 4,
+          heights = c(1,1,1,1.45))
+ggsave("Contact Parameters Overall Duration.tiff", width = 16, height = 16, units = "cm", dpi=300)
+
+ggarrange(figfreqmed, figfreqmax, figfreqave, 
           ncol = 1, nrow = 3,
           heights = c(1,1,1.45))
-#ggsave("Contact Parameters Overall.tiff", width = 16, height = 16, units = "cm", dpi=300)
+ggsave("Contact Parameters Overall Frequency.tiff", width = 16, height = 16, units = "cm", dpi=300)
 
-rm(cont_overall_sum, cont_overall_sum_oa, cont_overall_sum_k, cont_overall_sum_s, figavedur, figdur, figfreq)
+rm(cont_overall_sum, cont_overall_sum_oa, cont_overall_sum_k, cont_overall_sum_s, 
+   figdurmed, figdurmax, figdurave, figdurcum,
+   figfreqmed, figfreqmax, figfreqave)
 
-#Age-based contact matrices
+#Age-based contact matrices ----
 
 #List of ages 
 ind_inc_ana_prox_ages <- grp_contact_summary %>% 
@@ -593,101 +718,68 @@ rm("hts_cnet_filt_sym_temp", "a", "age_<5", "age_5-12", "age_13-17", "age_18-34"
    "age_=60", "age_counts" ,"age_list", "col_scheme", "col_scheme1","colfunc",
    "dur_matrix", "dur_matrix_klerk", "dur_matrix_sow", 
    "ind_inc_ana_prox_ages", "ind_list", "nam","pop_matrix_comb", 
-   "pop_matrix_k" , "pop_matrix_s", freq_matrix, freq_matrix_klerk, freq_matrix_sow,
+   "pop_matrix_k" , "pop_matrix_s", freq_matrix, freq_matrix_klerk, freq_matrix_sow
    )
 
-#Additional figures
-#Distribution of contact frequency, duration, average duration
-
-#Individual
-#Duration
-fig_dur_ind <- ggplot(ind_contact_summary, aes(ind_contatc_dur_median_p_day, fill=as.character(sars))) + 
-  geom_histogram(bins = 20) +
-  labs(x = "Close-proximiy event \nduration (seconds, log scale)", y = "Number of \nindividuals") +
-  scale_x_continuous(trans='log10') +
-  scale_fill_manual(values = c( "#1FA088FF", "#440154FF"),
-                    guide = "none") +
-  theme_classic()  +
-  theme(axis.title.y = element_text(size = 8),
-        axis.title.x = element_text(size = 8)) +
-  facet_wrap(~site)
-#Frequency
-fig_freq_ind  <- ggplot(ind_contact_summary, aes(ind_contatc_freq_median_p_day, fill=as.character(sars))) + 
-  geom_histogram(bins = 20) +
-  labs(x = "Close-proximiy event \nfrequency (log scale)", y = "Number of \nindividuals") +
-  scale_x_continuous(trans='log10') +
-  scale_fill_manual(values = c( "#1FA088FF", "#440154FF"),
-                    guide = FALSE) +
-  theme_classic() +
-  theme(axis.title.y = element_text(size = 8),
-        axis.title.x = element_text(size = 8)) +
-  facet_wrap(~site)
-#Ave duration
-fig_avedur_ind  <-ggplot(ind_contact_summary, aes(ind_ave_dur_median_p_day, fill=as.character(sars))) + 
-  geom_histogram(bins = 20) +
-  labs(x = "Average close-proximiy event \n duration (seconds, log scale)", y = "Number of \nindividuals") + 
-  guides(fill=guide_legend(title="SARS-CoV-2")) +
-  scale_x_continuous(trans='log10') +
-  scale_fill_manual(values = c( "#1FA088FF", "#440154FF"), labels = c("Negative", "Positive")) +
-  theme_classic() +
-  theme(legend.position="bottom",
-        legend.text=element_text(size=8),
-        legend.title=element_text(size=8),
-        axis.title.y = element_text(size = 8),
-        axis.title.x = element_text(size = 8)) +
-  facet_wrap(~site)
-
-#Grouped
-
-#Duration
-fig_dur_grp <- ggplot(grp_contact_summary, aes(grp_contatc_dur_median_p_day, fill=as.character(sars))) + 
-  geom_histogram(bins = 20) +
-  labs(x = "Close-proximiy event \nduration (seconds, log scale)", y = "Number of \nindividuals") +
-  scale_x_continuous(trans='log10') +
-  scale_fill_manual(values = c( "#1FA088FF", "#440154FF"),
-                    guide = FALSE) +
-  theme_classic() +
-  theme(axis.title.y = element_text(size = 8),
-        axis.title.x = element_text(size = 8)) +
-  facet_wrap(~site)
-#Frequency
-fig_freq_grp  <-ggplot(grp_contact_summary, aes(grp_contatc_freq_median_p_day, fill=as.character(sars))) + 
-  geom_histogram(bins = 20) +
-  labs(x = "Close-proximiy event \nfrequency (log scale)", y = "Number of \nindividuals") +
-  scale_x_continuous(trans='log10') +
-  scale_fill_manual(values = c( "#1FA088FF", "#440154FF"),
-                    guide = FALSE) +
-  theme_classic() +
-  theme(axis.title.y = element_text(size = 8),
-        axis.title.x = element_text(size = 8)) +
-  facet_wrap(~site)
-#Ave duration
-fig_avedur_grp <-ggplot(grp_contact_summary, aes(grp_ave_dur_median_p_day, fill=as.character(sars))) + 
-  geom_histogram(bins = 20) +
-  labs(x = "Average close-proximiy event \n duration (seconds, log scale)", y = "Number of \nindividuals") + 
-  guides(fill=guide_legend(title="SARS-CoV-2")) +
-  scale_x_continuous(trans='log10') +
-  scale_fill_manual(values = c( "#1FA088FF", "#440154FF"), labels = c("Negative", "Positive")) +
-  theme_classic() +
-  theme(axis.title.y = element_text(size = 8),
-        axis.title.x = element_text(size = 8)) +
-  theme(legend.position="bottom",
-        legend.text=element_text(size=8),
-        legend.title=element_text(size=8),
-        axis.title.y = element_text(size = 8),
-        axis.title.x = element_text(size = 8)) +
-  facet_wrap(~site)
-
-ggarrange(fig_dur_ind, fig_dur_grp, fig_freq_ind, fig_freq_grp, fig_avedur_ind,   fig_avedur_grp, 
-          labels = c("A", "D", "B", "E", "C", "F"),
-          ncol = 2, nrow = 3,
-          heights = c(1,1,1.45))
-#ggsave("Contact Distribution Overall.tiff", width = 16, height = 16, units = "cm", dpi=600)
-rm(fig_dur_ind, fig_dur_grp, fig_freq_ind, fig_freq_grp, fig_avedur_ind,   fig_avedur_grp)
+#Regression ----
 
 ind_contact_summary$sars <- factor(ind_contact_summary$sars)
-#Build model: Individual-level 
+ind_contact_summary$agegrp9 <- relevel(ind_contact_summary$agegrp9, ref="18-34")
+
 #Due to privacy concerns not all meta data included. Only final model shown
+  
+#Univariate analysis
+#Generate vector with list of variables to investigate
+ind_var_list <- c("site", "ixagegrp9", "ixminctcat2", "ixesarsvarf1", 
+                  "agegrp9", "sex", "sleep_room_ix", "cared_by_ix", 
+                  "ind_contact_dur_median_p_day", "ind_contact_dur_max", "ind_ave_dur_median_p_day", "ind_contact_cum_p_day",
+                  "ind_contact_freq_median_p_day", "ind_contact_freq_max","ind_contact_ave_freq_p_day")
+
+#Frequency table
+ind_contact_summary %>% 
+  select(c(ind_var_list, "sars")) %>% # keep only columns of interest
+  tbl_summary(     
+    by = sars,
+    type = list(c(sleep_room_ix,cared_by_ix) ~ "categorical"),
+    statistic = list(
+      all_continuous() ~ "{median} ({p25}-{p75})",
+      all_categorical() ~ "{n}/{N} ({p}%)"),
+    percent="row",
+    label  = list(                                              # display labels for column names
+      site   ~ "Site",                           
+      ixagegrp9 ~ "Index Age (years)",
+      ixminctcat2 ~ "Index Minimum Ct value",
+      agegrp9 ~  "Contact Age (years)",
+      sex ~  "Contact Sex",
+      ixesarsvarf1 ~ "SARS-CoV-2 variant",
+      sleep_room_ix ~ "Sleep in same room as index",
+      cared_by_ix ~ "Cared for by index",
+      ind_contact_dur_median_p_day ~  "Median daily duration",
+      ind_contact_dur_max ~ "Maximum duration",
+      ind_ave_dur_median_p_day ~ "Median average daily duration",
+      ind_contact_cum_p_day ~ "Cumulative time in contact",
+      ind_contact_freq_median_p_day ~  "Median daily frequency",
+      ind_contact_freq_max ~ "Maximum frequency",
+      ind_contact_ave_freq_p_day ~ "Daily average frequency"),) 
+
+#To complete full univariate analysis, define list of variables and function to perform model
+univ_res <- lapply(ind_var_list,
+                   
+                   function(var) {
+                     
+                     formula    <- as.formula(paste("sars ~", var, "+ (1 | site) + (1 | hhid)"))
+                     res.logist <- glmer(formula, data = ind_contact_summary,
+                                         family = binomial("logit"))
+                     data.frame(tidy(res.logist,conf.int=TRUE,exponentiate=TRUE,effects="fixed")) %>% 
+                       mutate_if(is.numeric, round, 4)
+                   })
+
+print(univ_res, quote=TRUE, noSpaces = TRUE)
+rm(univ_res)
+
+#Build model: Individual-level ----
+
+#Complete model excluding contact parameters
 ind_fin_mod <- glmer(sars ~ ixagegrp9 + ixminctcat2 + ixesarsvarf1 + 
                        agegrp9 + sex + 
                        (1 | site) + (1 | hhid), 
@@ -696,105 +788,475 @@ ind_fin_mod <- glmer(sars ~ ixagegrp9 + ixminctcat2 + ixesarsvarf1 +
 print(data.frame(tidy(ind_fin_mod,conf.int=TRUE,exponentiate=TRUE,effects="fixed")) %>% 
         mutate_if(is.numeric, round, 4), quote = TRUE, noSpaces = TRUE)
 
-#Median duration of contacts per day with index (ind_contatc_dur_median_p_day)
+#Median daily duration of contacts per day with index (ind_contact_dur_median_p_day)
 ind_fin_mod_mdur <- glmer(sars ~ ixagegrp9 + ixminctcat2 + ixesarsvarf1 + 
                             agegrp9 + sex + 
-                            ind_contatc_dur_median_p_day + 
+                            ind_contact_dur_median_p_day + 
                             (1 | site) + (1 | hhid), 
                           data = ind_contact_summary,
                           family = binomial("logit"))
 print(data.frame(tidy(ind_fin_mod_mdur,conf.int=TRUE,exponentiate=TRUE,effects="fixed")) %>% 
         mutate_if(is.numeric, round, 4), quote = TRUE, noSpaces = TRUE)
 
-#Median frequency of contacts per day with index (ind_contatc_freq_median_p_day)
+#Maximum duration of contacts with index (ind_contact_dur_max)
+ind_fin_mod_mxdur <- glmer(sars ~ ixagegrp9 + ixminctcat2 + ixesarsvarf1 + 
+                            agegrp9 + sex + 
+                            ind_contact_dur_max + 
+                            (1 | site) + (1 | hhid), 
+                          data = ind_contact_summary,
+                          family = binomial("logit"))
+print(data.frame(tidy(ind_fin_mod_mxdur,conf.int=TRUE,exponentiate=TRUE,effects="fixed")) %>% 
+        mutate_if(is.numeric, round, 4), quote = TRUE, noSpaces = TRUE)
+
+#Median average daily duration of contacts with index (ind_ave_dur_median_p_day)
+ind_fin_mod_avdur <- glmer(sars ~ ixagegrp9 + ixminctcat2 + ixesarsvarf1 + 
+                             agegrp9 + sex + 
+                             ind_ave_dur_median_p_day + 
+                             (1 | site) + (1 | hhid), 
+                           data = ind_contact_summary,
+                           family = binomial("logit"))
+print(data.frame(tidy(ind_fin_mod_avdur,conf.int=TRUE,exponentiate=TRUE,effects="fixed")) %>% 
+        mutate_if(is.numeric, round, 4), quote = TRUE, noSpaces = TRUE)
+
+#Cumulative time in contact with index (ind_contact_cum_p_day)
+ind_fin_mod_cdur <- glmer(sars ~ ixagegrp9 + ixminctcat2 + ixesarsvarf1 + 
+                             agegrp9 + sex + 
+                             ind_contact_cum_p_day + 
+                             (1 | site) + (1 | hhid), 
+                           data = ind_contact_summary,
+                           family = binomial("logit"))
+print(data.frame(tidy(ind_fin_mod_cdur,conf.int=TRUE,exponentiate=TRUE,effects="fixed")) %>% 
+        mutate_if(is.numeric, round, 4), quote = TRUE, noSpaces = TRUE)
+
+#Median frequency of contacts per day with index (ind_contact_freq_median_p_day)
 ind_fin_mod_mfeq <- glmer(sars ~ ixagegrp9 + ixminctcat2 + ixesarsvarf1 + 
                             agegrp9 + sex + 
-                            ind_contatc_freq_median_p_day + 
+                            ind_contact_freq_median_p_day + 
                             (1 | site) + (1 | hhid), 
                           data = ind_contact_summary,
                           family = binomial("logit"))
 print(data.frame(tidy(ind_fin_mod_mfeq,conf.int=TRUE,exponentiate=TRUE,effects="fixed")) %>% 
         mutate_if(is.numeric, round, 4), quote = TRUE, noSpaces = TRUE)
 
-#Average duration of contacts overall with index (ind_contact_ave_dur_full)
-ind_fin_mod_adur <- glmer(sars ~ ixagegrp9 + ixminctcat2 + ixesarsvarf1 + 
+#Maximum frequency of contacts per day with index (ind_contact_freq_max)
+ind_fin_mod_mxfeq <- glmer(sars ~ ixagegrp9 + ixminctcat2 + ixesarsvarf1 + 
                             agegrp9 + sex + 
-                            ind_ave_dur_median_p_day + 
+                             ind_contact_freq_max + 
                             (1 | site) + (1 | hhid), 
                           data = ind_contact_summary,
                           family = binomial("logit"))
-#Model does not converge!
-print(data.frame(tidy(ind_fin_mod_adur,conf.int=TRUE,exponentiate=TRUE,effects="fixed")) %>% 
+print(data.frame(tidy(ind_fin_mod_mxfeq,conf.int=TRUE,exponentiate=TRUE,effects="fixed")) %>% 
         mutate_if(is.numeric, round, 4), quote = TRUE, noSpaces = TRUE)
+
+#Daily average duration of contacts overall with index (ind_contact_ave_freq_p_day)
+ind_fin_mod_afreq <- glmer(sars ~ ixagegrp9 + ixminctcat2 + ixesarsvarf1 + 
+                            agegrp9 + sex + 
+                             ind_contact_ave_freq_p_day + 
+                            (1 | site) + (1 | hhid), 
+                          data = ind_contact_summary,
+                          family = binomial("logit"))
+print(data.frame(tidy(ind_fin_mod_afreq,conf.int=TRUE,exponentiate=TRUE,effects="fixed")) %>% 
+        mutate_if(is.numeric, round, 4), quote = TRUE, noSpaces = TRUE)
+
 
 #Build model: Grouped analysis ----
 
 grp_contact_summary$sars <- factor(grp_contact_summary$sars)
-grp_fin_mod <- glmer(sars ~ agegrp9 + smokecignow1 + bmicat + ixesarsvarf1 +
+grp_contact_summary$agegrp9 <- relevel(grp_contact_summary$agegrp9, ref="18-34")
+
+#Univariate analysis
+#Generate vector with list of variables to investigate
+grp_var_list <- c("site", "agegrp9", "sex", "bmicat", "smokecignow1", "ixesarsvarf1",
+                  "grp_contact_dur_median_p_day", "grp_contact_dur_max", "grp_ave_dur_median_p_day", "grp_contact_cum_p_day",
+                  "grp_contact_freq_median_p_day", "grp_contact_freq_max","grp_contact_ave_freq_p_day")
+
+#Frequency table
+grp_contact_summary %>% 
+  select(c(grp_var_list, "sars")) %>% # keep only columns of interest
+  tbl_summary(     
+    by = sars,
+    percent="row",
+    statistic = list(
+      all_continuous() ~ "{median} ({p25}-{p75})",
+      all_categorical() ~ "{n}/{N} ({p}%)"
+    ),
+    label  = list(                                              # display labels for column names
+      site   ~ "Site",                           
+      agegrp9 ~  "Contact Age (years)",
+      sex ~  "Contact Sex",
+      bmicat ~ "Body mass index",
+      smokecignow1 ~ "Current smoking",
+      ixesarsvarf1 ~ "SARS-CoV-2 variant",
+      grp_contact_dur_median_p_day ~  "Median daily duration",
+      grp_contact_dur_max ~ "Maximum duration",
+      grp_ave_dur_median_p_day ~ "Median average daily duration",
+      grp_contact_cum_p_day ~ "Cumulative time in contact",
+      grp_contact_freq_median_p_day ~  "Median daily frequency",
+      grp_contact_freq_max ~ "Maximum frequency",
+      grp_contact_ave_freq_p_day ~ "Daily average frequency"),) 
+
+#To complete full univariate analysis, define list of variables and function to perform model
+
+univ_res <- lapply(grp_var_list,
+                   
+                   function(var) {
+                     
+                     formula    <- as.formula(paste("sars ~", var, "+ (1 | site) + (1 | hhid) + offset(nodes_in_contact_d_grp)"))
+                     res.logist <- glmer(formula, data = grp_contact_summary,
+                                         family = binomial("logit"))
+                     data.frame(tidy(res.logist,conf.int=TRUE,exponentiate=TRUE,effects="fixed")) %>% 
+                       mutate_if(is.numeric, round, 4)
+                   })
+print(univ_res, quote=TRUE, noSpaces = TRUE)
+rm(univ_res)
+
+#Build model: group-level ----
+
+#Complete model excluding contact parameters
+grp_fin_mod <- glmer(sars ~ agegrp9 + bmicat + smokecignow1 +  ixesarsvarf1 + 
                        (1 | site) + (1 | hhid) + offset(nodes_in_contact_d_grp), 
                      data = grp_contact_summary,
                      family = binomial("logit"))
 print(data.frame(tidy(grp_fin_mod,conf.int=TRUE,exponentiate=TRUE,effects="fixed")) %>% 
-        mutate_if(is.numeric, round, 4), quote=TRUE, noSpaces = TRUE)
+        mutate_if(is.numeric, round, 4), quote = TRUE, noSpaces = TRUE)
 
-#Median duration of contacts per day with infected (grp_contatc_dur_median_p_day)
-grp_fin_mod_mdur <- glmer(sars ~ agegrp9 + smokecignow1 + bmicat + ixesarsvarf1 +
-                            grp_contatc_dur_median_p_day + 
+#Median daily duration of contacts per day with cases (grp_contact_dur_median_p_day)
+grp_fin_mod_mdur <- glmer(sars ~ agegrp9 + bmicat + smokecignow1 +  ixesarsvarf1 + 
+                       grp_contact_dur_median_p_day + 
+                       (1 | site) + (1 | hhid) + offset(nodes_in_contact_d_grp), 
+                     data = grp_contact_summary,
+                          family = binomial("logit"))
+print(data.frame(tidy(grp_fin_mod_mdur,conf.int=TRUE,exponentiate=TRUE,effects="fixed")) %>% 
+        mutate_if(is.numeric, round, 4), quote = TRUE, noSpaces = TRUE)
+
+#Maximum duration of contacts with cases (grp_contact_dur_max)
+grp_fin_mod_mxdur <- glmer(sars ~ agegrp9 + bmicat + smokecignow1 +  ixesarsvarf1 + 
+                             grp_contact_dur_max + 
+                             (1 | site) + (1 | hhid) + offset(nodes_in_contact_d_grp), 
+                           data = grp_contact_summary,
+                           family = binomial("logit"))
+print(data.frame(tidy(grp_fin_mod_mxdur,conf.int=TRUE,exponentiate=TRUE,effects="fixed")) %>% 
+        mutate_if(is.numeric, round, 4), quote = TRUE, noSpaces = TRUE)
+
+#Median average daily duration of contacts with cases (grp_ave_dur_median_p_day)
+grp_fin_mod_avdur <- glmer(sars ~ agegrp9 + bmicat + smokecignow1 +  ixesarsvarf1 + 
+                             grp_ave_dur_median_p_day + 
+                             (1 | site) + (1 | hhid) + offset(nodes_in_contact_d_grp), 
+                           data = grp_contact_summary,
+                           family = binomial("logit"))
+print(data.frame(tidy(grp_fin_mod_avdur,conf.int=TRUE,exponentiate=TRUE,effects="fixed")) %>% 
+        mutate_if(is.numeric, round, 4), quote = TRUE, noSpaces = TRUE)
+
+#Cumulative time in contact with cases (grp_contact_cum_p_day)
+grp_fin_mod_cdur <- glmer(sars ~ agegrp9 + bmicat + smokecignow1 +  ixesarsvarf1 +
+                            grp_contact_cum_p_day + 
                             (1 | site) + (1 | hhid) + offset(nodes_in_contact_d_grp), 
                           data = grp_contact_summary,
                           family = binomial("logit"))
-print(data.frame(tidy(grp_fin_mod_mdur,conf.int=TRUE,exponentiate=TRUE,effects="fixed")) %>% 
-        mutate_if(is.numeric, round, 4), quote=TRUE, noSpaces = TRUE)
+print(data.frame(tidy(grp_fin_mod_cdur,conf.int=TRUE,exponentiate=TRUE,effects="fixed")) %>% 
+        mutate_if(is.numeric, round, 4), quote = TRUE, noSpaces = TRUE)
 
-#Median frequency of contacts per day with infected (grp_contatc_freq_median_p_day)
-grp_fin_mod_mfeq <- glmer(sars ~ agegrp9 + smokecignow1 + bmicat + ixesarsvarf1 +
-                            grp_contatc_freq_median_p_day + 
+#Median frequency of contacts per day with cases (grp_contact_freq_median_p_day)
+grp_fin_mod_mfeq <- glmer(sars ~ agegrp9 + bmicat + smokecignow1 +  ixesarsvarf1 + 
+                            grp_contact_freq_median_p_day + 
                             (1 | site) + (1 | hhid) + offset(nodes_in_contact_d_grp), 
                           data = grp_contact_summary,
                           family = binomial("logit"))
 print(data.frame(tidy(grp_fin_mod_mfeq,conf.int=TRUE,exponentiate=TRUE,effects="fixed")) %>% 
-        mutate_if(is.numeric, round, 4), quote=TRUE, noSpaces = TRUE)
+        mutate_if(is.numeric, round, 4), quote = TRUE, noSpaces = TRUE)
 
-#Average duration of contacts overall with infected (grp_contact_ave_dur_full)
-grp_fin_mod_adur <- glmer(sars ~ agegrp9 + smokecignow1 + bmicat + ixesarsvarf1 +
-                            grp_contact_ave_dur_full + 
-                            (1 | site) + (1 | hhid) + offset(nodes_in_contact_d_grp), 
-                          data = grp_contact_summary,
+#Maximum frequency of contacts per day with cases (grp_contact_freq_max)
+grp_fin_mod_mxfeq <- glmer(sars ~ agegrp9 + bmicat + smokecignow1 +  ixesarsvarf1 + 
+                             grp_contact_freq_max + 
+                             (1 | site) + (1 | hhid) + offset(nodes_in_contact_d_grp), 
+                           data = grp_contact_summary,
+                           family = binomial("logit"))
+print(data.frame(tidy(grp_fin_mod_mxfeq,conf.int=TRUE,exponentiate=TRUE,effects="fixed")) %>% 
+        mutate_if(is.numeric, round, 4), quote = TRUE, noSpaces = TRUE)
+
+#Daily average frequency of contacts overall with cases (grp_contact_ave_freq_p_day)
+grp_fin_mod_afreq <- glmer(sars ~ agegrp9 + bmicat + smokecignow1 +  ixesarsvarf1 + 
+                             grp_contact_ave_freq_p_day + 
+                             (1 | site) + (1 | hhid) + offset(nodes_in_contact_d_grp), 
+                           data = grp_contact_summary,
+                           family = binomial("logit"))
+print(data.frame(tidy(grp_fin_mod_afreq,conf.int=TRUE,exponentiate=TRUE,effects="fixed")) %>% 
+        mutate_if(is.numeric, round, 4), quote = TRUE, noSpaces = TRUE)
+
+#Assess association with Wilcoxon rank-sum test ----
+
+#Median daily duration
+ind_contact_dur_median_p_day <- wilcox.test( ind_contact_dur_median_p_day ~ sars, data = ind_contact_summary,
+                                             paired = FALSE, 
+                                             exact = FALSE)
+#Maximum duration
+ind_contact_dur_max <- wilcox.test( ind_contact_dur_max ~ sars, data = ind_contact_summary,
+                                    paired = FALSE, 
+                                    exact = FALSE)
+#Median average daily duration 
+ind_ave_dur_median_p_day <- wilcox.test( ind_ave_dur_median_p_day ~ sars, data = ind_contact_summary,
+                                         paired = FALSE, 
+                                         exact = FALSE)
+#Cumulative time in contact
+ind_contact_cum_p_day <- wilcox.test( ind_contact_cum_p_day ~ sars, data = ind_contact_summary,
+                                      paired = FALSE, 
+                                      exact = FALSE)
+#Median daily frequency
+ind_contact_freq_median_p_day <- wilcox.test( ind_contact_freq_median_p_day ~ sars, data = ind_contact_summary,
+                                              paired = FALSE, 
+                                              exact = FALSE)
+#Maximum frequency
+ind_contact_freq_max <- wilcox.test( ind_contact_freq_max ~ sars, data = ind_contact_summary,
+                                     paired = FALSE, 
+                                     exact = FALSE)
+#Daily average frequency
+ind_contact_ave_freq_p_day <- wilcox.test( ind_contact_ave_freq_p_day ~ sars, data = ind_contact_summary,
+                                           paired = FALSE, 
+                                           exact = FALSE)
+
+#Median daily duration
+grp_contact_dur_median_p_day <- wilcox.test(  grp_contact_dur_median_p_day ~ sars, data = grp_contact_summary,
+                                              paired = FALSE, 
+                                              exact = FALSE)
+#Maximum duration
+grp_contact_dur_max <- wilcox.test( grp_contact_dur_max ~ sars, data = grp_contact_summary,
+                                    paired = FALSE, 
+                                    exact = FALSE)
+#Median average daily duration
+grp_ave_dur_median_p_day  <- wilcox.test(grp_ave_dur_median_p_day ~ sars, data = grp_contact_summary,
+                                         paired = FALSE, 
+                                         exact = FALSE)
+#Cumulative time in contact
+grp_contact_cum_p_day <- wilcox.test( grp_contact_cum_p_day ~ sars, data = grp_contact_summary,
+                                      paired = FALSE, 
+                                      exact = FALSE)
+#Median daily frequency
+grp_contact_freq_median_p_day <- wilcox.test( grp_contact_freq_median_p_day ~ sars, data = grp_contact_summary,
+                                              paired = FALSE, 
+                                              exact = FALSE)
+#Maximum frequency
+grp_contact_freq_max <- wilcox.test( grp_contact_freq_max ~ sars, data = grp_contact_summary,
+                                     paired = FALSE, 
+                                     exact = FALSE)
+#Daily average frequency
+grp_contact_ave_freq_p_day <- wilcox.test( grp_contact_ave_freq_p_day ~ sars, data = grp_contact_summary,
+                                           paired = FALSE, 
+                                           exact = FALSE)
+
+
+wilcox_results_complete <- data.frame(rbind(ind_contact_dur_median_p_day, ind_contact_dur_max, ind_ave_dur_median_p_day, 
+                        ind_contact_cum_p_day, ind_contact_freq_median_p_day, ind_contact_freq_max, 
+                        ind_contact_ave_freq_p_day, 
+                        grp_contact_dur_median_p_day, grp_contact_dur_max, grp_ave_dur_median_p_day, 
+                        grp_contact_cum_p_day, grp_contact_freq_median_p_day, grp_contact_freq_max, 
+                        grp_contact_ave_freq_p_day)) %>% 
+  select(p.value) %>% 
+  rename("P value complete analysis"="p.value")
+
+print(wilcox_results_complete, quote = TRUE)
+
+#Sensitivity analysis: repeat results with only households without excluded members ----
+
+ind_contact_summary_excl <- ind_contact_summary %>% 
+  filter(members_excluded == 0) 
+
+grp_contact_summary_excl <- grp_contact_summary %>% 
+  filter(members_excluded == 0) 
+
+#Sensitivity analysis: Logistic regression ----
+#Individual analysis (sensitivity) ----
+
+#Frequency table
+ind_contact_summary_excl %>% 
+  select(c(ind_var_list, "sars")) %>% # keep only columns of interest
+  tbl_summary(     
+    by = sars,
+    type = list(c(sleep_room_ix,cared_by_ix) ~ "categorical"),
+    statistic = list(
+      all_continuous() ~ "{median} ({p25}-{p75})",
+      all_categorical() ~ "{n}/{N} ({p}%)"),
+    percent="row",
+    label  = list(                                              # display labels for column names
+      site   ~ "Site",                           
+      ixagegrp9 ~ "Index Age (years)",
+      ixminctcat2 ~ "Index Minimum Ct value",
+      agegrp9 ~  "Contact Age (years)",
+      sex ~  "Contact Sex",
+      ixesarsvarf1 ~ "SARS-CoV-2 variant",
+      sleep_room_ix ~ "Sleep in same room as index",
+      cared_by_ix ~ "Cared for by index",
+      ind_contact_dur_median_p_day ~  "Median daily duration",
+      ind_contact_dur_max ~ "Maximum duration",
+      ind_ave_dur_median_p_day ~ "Median average daily duration",
+      ind_contact_cum_p_day ~ "Cumulative time in contact",
+      ind_contact_freq_median_p_day ~  "Median daily frequency",
+      ind_contact_freq_max ~ "Maximum frequency",
+      ind_contact_ave_freq_p_day ~ "Daily average frequency"),) 
+
+univ_res <- lapply(ind_var_list,
+                   
+                   function(var) {
+                     
+                     formula    <- as.formula(paste("sars ~", var, "+ (1 | site) + (1 | hhid)"))
+                     res.logist <- glmer(formula, data = ind_contact_summary_excl,
+                                         family = binomial("logit"))
+                     data.frame(tidy(res.logist,conf.int=TRUE,exponentiate=TRUE,effects="fixed")) %>% 
+                       mutate_if(is.numeric, round, 4)
+                   })
+
+print(univ_res, quote=TRUE, noSpaces = TRUE)
+
+#Complete model excluding contact parameters
+ind_fin_mod <- glmer(sars ~ ixagegrp9 + ixminctcat2 + ixesarsvarf1 + 
+                       agegrp9 + sex + 
+                       (1 | site) + (1 | hhid), 
+                     data = ind_contact_summary_excl,
+                     family = binomial("logit"))
+print(data.frame(tidy(ind_fin_mod,conf.int=TRUE,exponentiate=TRUE,effects="fixed")) %>% 
+        mutate_if(is.numeric, round, 4), quote = TRUE, noSpaces = TRUE)
+
+#Median daily duration of contacts per day with index (ind_contact_dur_median_p_day)
+ind_fin_mod_mdur <- glmer(sars ~ ixagegrp9 + ixminctcat2 + ixesarsvarf1 + 
+                            agegrp9 + sex + 
+                            ind_contact_dur_median_p_day + 
+                            (1 | site) + (1 | hhid), 
+                          data = ind_contact_summary_excl,
                           family = binomial("logit"))
-print(data.frame(tidy(grp_fin_mod_adur,conf.int=TRUE,exponentiate=TRUE,effects="fixed")) %>% 
-        mutate_if(is.numeric, round, 4), quote=TRUE, noSpaces = TRUE, scientific = FALSE)
+print(data.frame(tidy(ind_fin_mod_mdur,conf.int=TRUE,exponentiate=TRUE,effects="fixed")) %>% 
+        mutate_if(is.numeric, round, 4), quote = TRUE, noSpaces = TRUE)
 
-#Also assess association with Wilcoxon rank-sum test
-#Individual analysis
-#Median duration
-ind_mdur_wilcox <- wilcox.test(ind_contatc_dur_median_p_day ~ sars, data = ind_contact_summary,
-                               paired = FALSE, 
-                               exact = FALSE)
-#Median frequency
-ind_mfreq_wilcox <- wilcox.test(ind_contatc_freq_median_p_day ~ sars, data = ind_contact_summary,
-                                paired = FALSE, 
-                                exact = FALSE)
-#Average duration
-ind_adur_wilcox <- wilcox.test(ind_contact_ave_dur_full ~ sars, data = ind_contact_summary,
-                               paired = FALSE, 
-                               exact = FALSE)
+#Maximum duration of contacts with index (ind_contact_dur_max)
+ind_fin_mod_mxdur <- glmer(sars ~ ixagegrp9 + ixminctcat2 + ixesarsvarf1 + 
+                             agegrp9 + sex + 
+                             ind_contact_dur_max + 
+                             (1 | site) + (1 | hhid), 
+                           data = ind_contact_summary_excl,
+                           family = binomial("logit"))
+print(data.frame(tidy(ind_fin_mod_mxdur,conf.int=TRUE,exponentiate=TRUE,effects="fixed")) %>% 
+        mutate_if(is.numeric, round, 4), quote = TRUE, noSpaces = TRUE)
 
-#Group analysis
-#Median duration
-grp_mdur_wilcox <-wilcox.test(grp_contatc_dur_median_p_day ~ sars, data = grp_contact_summary,
-                              paired = FALSE, 
-                              exact = FALSE)
-#Median frequency
-grp_mfreq_wilcox <- wilcox.test(grp_contatc_freq_median_p_day ~ sars, data = grp_contact_summary,
-                                paired = FALSE, 
-                                exact = FALSE)
-#Average duration
-grp_adur_wilcox <- wilcox.test(grp_contact_ave_dur_full ~ sars, data = grp_contact_summary,
-                               paired = FALSE, 
-                               exact = FALSE)
+#Median average daily duration of contacts with index (ind_ave_dur_median_p_day)
+ind_fin_mod_avdur <- glmer(sars ~ ixagegrp9 + ixminctcat2 + ixesarsvarf1 + 
+                             agegrp9 + sex + 
+                             ind_ave_dur_median_p_day + 
+                             (1 | site) + (1 | hhid), 
+                           data = ind_contact_summary_excl,
+                           family = binomial("logit"))
+print(data.frame(tidy(ind_fin_mod_avdur,conf.int=TRUE,exponentiate=TRUE,effects="fixed")) %>% 
+        mutate_if(is.numeric, round, 4), quote = TRUE, noSpaces = TRUE)
 
-wilcox_results <- cbind(ind_mdur_wilcox, ind_mfreq_wilcox, ind_adur_wilcox,
-                        grp_mdur_wilcox, grp_mfreq_wilcox, grp_adur_wilcox)
-wilcox_results
-rm(ind_mdur_wilcox, ind_mfreq_wilcox, ind_adur_wilcox,
-   grp_mdur_wilcox, grp_mfreq_wilcox, grp_adur_wilcox)
+#Cumulative time in contact with index (ind_contact_cum_p_day)
+ind_fin_mod_cdur <- glmer(sars ~ ixagegrp9 + ixminctcat2 + ixesarsvarf1 + 
+                            agegrp9 + sex + 
+                            ind_contact_cum_p_day + 
+                            (1 | site) + (1 | hhid), 
+                          data = ind_contact_summary_excl,
+                          family = binomial("logit"))
+print(data.frame(tidy(ind_fin_mod_cdur,conf.int=TRUE,exponentiate=TRUE,effects="fixed")) %>% 
+        mutate_if(is.numeric, round, 4), quote = TRUE, noSpaces = TRUE)
+
+#Median frequency of contacts per day with index (ind_contact_freq_median_p_day)
+ind_fin_mod_mfeq <- glmer(sars ~ ixagegrp9 + ixminctcat2 + ixesarsvarf1 + 
+                            agegrp9 + sex + 
+                            ind_contact_freq_median_p_day + 
+                            (1 | site) + (1 | hhid), 
+                          data = ind_contact_summary_excl,
+                          family = binomial("logit"))
+print(data.frame(tidy(ind_fin_mod_mfeq,conf.int=TRUE,exponentiate=TRUE,effects="fixed")) %>% 
+        mutate_if(is.numeric, round, 4), quote = TRUE, noSpaces = TRUE)
+
+#Maximum frequency of contacts per day with index (ind_contact_freq_max)
+ind_fin_mod_mxfeq <- glmer(sars ~ ixagegrp9 + ixminctcat2 + ixesarsvarf1 + 
+                             agegrp9 + sex + 
+                             ind_contact_freq_max + 
+                             (1 | site) + (1 | hhid), 
+                           data = ind_contact_summary_excl,
+                           family = binomial("logit"))
+print(data.frame(tidy(ind_fin_mod_mxfeq,conf.int=TRUE,exponentiate=TRUE,effects="fixed")) %>% 
+        mutate_if(is.numeric, round, 4), quote = TRUE, noSpaces = TRUE)
+
+#Daily average duration of contacts overall with index (ind_contact_ave_freq_p_day)
+ind_fin_mod_afreq <- glmer(sars ~ ixagegrp9 + ixminctcat2 + ixesarsvarf1 + 
+                             agegrp9 + sex + 
+                             ind_contact_ave_freq_p_day + 
+                             (1 | site) + (1 | hhid), 
+                           data = ind_contact_summary_excl,
+                           family = binomial("logit"))
+
+print(data.frame(tidy(ind_fin_mod_afreq,conf.int=TRUE,exponentiate=TRUE,effects="fixed")) %>% 
+        mutate_if(is.numeric, round, 4), quote = TRUE, noSpaces = TRUE)
+
+
+#Sensitivity analysis: wilcoxon rank sum ----
+
+#Median daily duration
+ind_contact_dur_median_p_day <- wilcox.test( ind_contact_dur_median_p_day ~ sars, data = ind_contact_summary_excl,
+                                             paired = FALSE, 
+                                             exact = FALSE)
+#Maximum duration
+ind_contact_dur_max <- wilcox.test( ind_contact_dur_max ~ sars, data = ind_contact_summary_excl,
+                                    paired = FALSE, 
+                                    exact = FALSE)
+#Median average daily duration 
+ind_ave_dur_median_p_day <- wilcox.test( ind_ave_dur_median_p_day ~ sars, data = ind_contact_summary_excl,
+                                         paired = FALSE, 
+                                         exact = FALSE)
+#Cumulative time in contact
+ind_contact_cum_p_day <- wilcox.test( ind_contact_cum_p_day ~ sars, data = ind_contact_summary_excl,
+                                      paired = FALSE, 
+                                      exact = FALSE)
+#Median daily frequency
+ind_contact_freq_median_p_day <- wilcox.test( ind_contact_freq_median_p_day ~ sars, data = ind_contact_summary_excl,
+                                              paired = FALSE, 
+                                              exact = FALSE)
+#Maximum frequency
+ind_contact_freq_max <- wilcox.test( ind_contact_freq_max ~ sars, data = ind_contact_summary_excl,
+                                     paired = FALSE, 
+                                     exact = FALSE)
+#Daily average frequency
+ind_contact_ave_freq_p_day <- wilcox.test( ind_contact_ave_freq_p_day ~ sars, data = ind_contact_summary_excl,
+                                           paired = FALSE, 
+                                           exact = FALSE)
+
+#Median daily duration
+grp_contact_dur_median_p_day <- wilcox.test(  grp_contact_dur_median_p_day ~ sars, data = grp_contact_summary_excl,
+                                              paired = FALSE, 
+                                              exact = FALSE)
+#Maximum duration
+grp_contact_dur_max <- wilcox.test( grp_contact_dur_max ~ sars, data = grp_contact_summary_excl,
+                                    paired = FALSE, 
+                                    exact = FALSE)
+#Median average daily duration
+grp_ave_dur_median_p_day  <- wilcox.test(grp_ave_dur_median_p_day ~ sars, data = grp_contact_summary_excl,
+                                         paired = FALSE, 
+                                         exact = FALSE)
+#Cumulative time in contact
+grp_contact_cum_p_day <- wilcox.test( grp_contact_cum_p_day ~ sars, data = grp_contact_summary_excl,
+                                      paired = FALSE, 
+                                      exact = FALSE)
+#Median daily frequency
+grp_contact_freq_median_p_day <- wilcox.test( grp_contact_freq_median_p_day ~ sars, data = grp_contact_summary_excl,
+                                              paired = FALSE, 
+                                              exact = FALSE)
+#Maximum frequency
+grp_contact_freq_max <- wilcox.test( grp_contact_freq_max ~ sars, data = grp_contact_summary_excl,
+                                     paired = FALSE, 
+                                     exact = FALSE)
+#Daily average frequency
+grp_contact_ave_freq_p_day <- wilcox.test( grp_contact_ave_freq_p_day ~ sars, data = grp_contact_summary_excl,
+                                           paired = FALSE, 
+                                           exact = FALSE)
+
+
+wilcox_results_rest <- data.frame(rbind(ind_contact_dur_median_p_day, ind_contact_dur_max, ind_ave_dur_median_p_day, 
+                                            ind_contact_cum_p_day, ind_contact_freq_median_p_day, ind_contact_freq_max, 
+                                            ind_contact_ave_freq_p_day, 
+                                            grp_contact_dur_median_p_day, grp_contact_dur_max, grp_ave_dur_median_p_day, 
+                                            grp_contact_cum_p_day, grp_contact_freq_median_p_day, grp_contact_freq_max, 
+                                            grp_contact_ave_freq_p_day)) %>% 
+  select(p.value) %>% 
+  rename("P value restricted analysis"="p.value")
+
+print(wilcox_results_rest, quote = TRUE)
+
+print(cbind(wilcox_results_complete, wilcox_results_rest), quote = FALSE)
